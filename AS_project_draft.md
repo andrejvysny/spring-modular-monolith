@@ -248,30 +248,33 @@ Podporné prvky: API Gateway (vyjednávanie verzií, rate‑limiting), Message B
 
 ```mermaid
 flowchart LR
-  subgraph Edge[Edge / API layer]
-    Client[Clients (Web, Mobile, 3rd‑party)]
-    APIGW[API Gateway]
+  %% Edge/API layer
+  subgraph Edge["Edge / API layer"]
+    Client["Clients (Web, Mobile, 3rd-party)"]
+    APIGW["API Gateway"]
   end
 
-  subgraph S1[Catalog Service]
-    CDB[(catalog DB)]
+  %% Services + DBs
+  subgraph S1["Catalog Service"]
+    CDB["catalog DB"]
   end
-  subgraph S2[Orders Service]
-    ODB[(orders DB)]
+  subgraph S2["Orders Service"]
+    ODB["orders DB"]
   end
-  subgraph S3[Inventory Service]
-    IDB[(inventory DB)]
+  subgraph S3["Inventory Service"]
+    IDB["inventory DB"]
   end
-  subgraph S4[Notifications Service]
-    NDB[(notifications DB)]
+  subgraph S4["Notifications Service"]
+    NDB["notifications DB"]
   end
-  subgraph S5[Users/Auth Service]
-    UDB[(users DB)]
+  subgraph S5["Users/Auth Service"]
+    UDB["users DB"]
   end
 
-  MB[(Message Broker)]
-  Obs[(Observability: Traces/Metrics/Logs)]
+  MB["Message Broker"]
+  Obs["Observability: Traces / Metrics / Logs"]
 
+  %% Ingress
   Client --> APIGW
   APIGW --> S1
   APIGW --> S2
@@ -279,24 +282,28 @@ flowchart LR
   APIGW --> S4
   APIGW --> S5
 
-  S2 -- OrderCreated/Cancelled/Confirmed --> MB
-  S1 -- ProductChanged --> MB
-  S3 -- StockReserved/Released --> MB
-  MB -- subscribe --> S3
-  MB -- subscribe --> S4
-  MB -- subscribe --> S2
+  %% Events
+  S2 -- "OrderCreated / Cancelled / Confirmed" --> MB
+  S1 -- "ProductChanged" --> MB
+  S3 -- "StockReserved / Released" --> MB
+  MB -- "subscribe" --> S3
+  MB -- "subscribe" --> S4
+  MB -- "subscribe" --> S2
 
+  %% Datastores
   S1 --> CDB
   S2 --> ODB
   S3 --> IDB
   S4 --> NDB
   S5 --> UDB
 
+  %% Observability
   S1 --- Obs
   S2 --- Obs
   S3 --- Obs
   S4 --- Obs
   S5 --- Obs
+
 ```
 
 Architektonické zásady:
@@ -399,7 +406,7 @@ classDiagram
     +Invariants: code unique, price numeric>=0
     +EventsOut: ProductChanged(v,occurredAt)
     +EventsIn: -
-    +API: GET /products, GET /products/{code}
+    +API: GET /products, GET /products/:code
     +ACL: PublishedLanguage only
     +DB: schema catalog
   }
@@ -409,7 +416,7 @@ classDiagram
     +Invariants: nonEmptyItems, validStatusFlow, priceIntegrity
     +EventsOut: OrderCreated, OrderCancelled, OrderConfirmed
     +EventsIn: StockReserved, StockReleased, PaymentCaptured
-    +API: POST /orders, GET /orders{,/{id}}
+    +API: POST /orders, GET /orders, GET /orders/:id
     +ACL: CatalogACL (sync), optional ProductView
     +DB: schema orders
   }
@@ -418,7 +425,7 @@ classDiagram
     +Invariants: nonNegativeStock, idempotentReservation
     +EventsOut: StockReserved, StockReleased
     +EventsIn: OrderCreated, OrderCancelled
-    +API: GET /inventory/{code}
+    +API: GET /inventory/:code
     +ACL: PublishedLanguage only
     +DB: schema inventory
   }
