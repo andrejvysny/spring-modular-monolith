@@ -1,27 +1,13 @@
-# Domain-Driven Decomposition for Microservices: Migration Study
+# Doménovo orientovaná dekompozícia ako stratégia migrácie z monolitov na mikroslužby
 
-**Doménovo orientovaná dekompozícia ako stratégia migrácie z monolitov na mikroslužby**
-
-**Typ dokumentu:** Industry whitepaper (teoretická fáza, bez produkčnej telemetrie)
-
-**Autori:** tím semestrálneho projektu (FIIT)
+**Autori:** Andrej Vyšný, Erik Roganský
+**Akademický rok:** 2025/2026
 
 **Kľúčové pojmy:** DDD, bounded context, context map, Strangler Fig, Saga, outbox, idempotencia, 12‑Factor, observability
 
----
-
-## Executive Summary
-
-* Prečo DDD pre migrácie: presné hranice, menšia prepojenosť, lepšia zmenovosť.
-* Čo dokument prináša: rámec, metriky, migračné vzory, hodnotiace kritériá.
-* Čo dokument neobsahuje: implementáciu, produkčnú telemetriu, kompletnú refaktorizáciu.
-* Pre koho: architekti, tech leadri, vlastníci domény.
-
----
-
 ## Abstrakt
 
-Článok medzi monolitom a mikroslužbami skúma doménovo orientovanú dekompozíciu vedenú DDD a vzormi Strangler Fig, Saga a outbox. Ako prípadovú štúdiu používame verejný repozitár **andrejvysny/spring-modular-monolith**: e‑commerce **modulárny monolit** postavený na **Spring Modulith** s modulmi **Common, Catalog, Orders, Inventory, Notifications**; každý modul spravuje vlastné dáta (oddelené schémy `catalog`, `orders`, `inventory`) a preferuje **event‑driven** komunikáciu. Modul **Orders** pri úspešnom vytvorení objednávky publikuje **OrderCreatedEvent**, ktorý konzumujú **Inventory** a **Notifications**; udalosť sa zároveň propaguje do externého brokera (**RabbitMQ**). Repo poskytuje pripravené **observability** a **ops** podklady: **Zipkin**, **Spring Actuator** vrátane **/actuator/modulith**, **Docker Compose** a manifesty pre **Kubernetes/KinD**; build je **Maven/JDK 24**. Táto konfigurácia umožňuje navrhnúť realistický migračný plán bez produkčnej telemetrie a vytvoriť overiteľné rozhodovacie artefakty (mapy kontextov, kontrakty, návrhy Ság a ACL) pre neskoršiu empirickú fázu.
+Článok medzi monolitom a mikroslužbami skúma doménovo orientovanú dekompozíciu vedenú DDD a vzormi Strangler Fig, Saga a outbox. Ako prípadovú štúdiu používame verejný repozitár **andrejvysny/spring-modular-monolith**: e‑commerce **modulárny monolit** postavený na **Spring Modulith** s modulmi **Common, Catalog, Orders, Inventory, Notifications, Users**; každý modul spravuje vlastné dáta (oddelené schémy `catalog`, `orders`, `inventory`) a preferuje **event‑driven** komunikáciu. Modul **Orders** pri úspešnom vytvorení objednávky publikuje **OrderCreatedEvent**, ktorý konzumujú **Inventory** a **Notifications**; udalosť sa zároveň propaguje do externého brokera (**RabbitMQ**). Repo poskytuje pripravené **observability** a **ops** podklady: **Zipkin**, **Spring Actuator** vrátane **/actuator/modulith**, **Docker Compose** a manifesty pre **Kubernetes/KinD**; build je **Maven/JDK 24**. Táto konfigurácia umožňuje navrhnúť realistický migračný plán bez produkčnej telemetrie a vytvoriť overiteľné rozhodovacie artefakty (mapy kontextov, kontrakty, návrhy Ság a ACL) pre neskoršiu empirickú fázu.
 
 ---
 
@@ -94,7 +80,7 @@ Metodika vyžaduje tieto artefakty: mapy kontextov, katalóg agregátov s invari
 
 ## 4. Cieľový repozitár a technológie
 
-**Repozitár:** [andrejvysny/spring-modular-monolith](https://github.com/andrejvysny/spring-modular-monolith) – verejná fork varianta ukážkovej e‑commerce aplikácie na **Spring Modulith**. Projekt je licencovaný pod **Apache‑2.0** a obsahuje moduly **Common, Catalog, Orders, Inventory, Notifications**, s dôrazom na **nezávislosť modulov**, **udalostnú komunikáciu** a **izolované dátové schémy** (`catalog`, `orders`, `inventory`).
+**Repozitár:** [andrejvysny/spring-modular-monolith](https://github.com/andrejvysny/spring-modular-monolith) – verejná fork varianta ukážkovej e‑commerce aplikácie na **Spring Modulith**. Projekt je licencovaný pod **Apache‑2.0** a obsahuje moduly **Common, Catalog, Orders, Inventory, Notifications, Users**, s dôrazom na **nezávislosť modulov**, **udalostnú komunikáciu** a **izolované dátové schémy** (`catalog`, `orders`, `inventory`, `users`).
 
 **Komunikačné toky:** **Orders → Catalog** (validačné volanie cez public API), **Orders → (Inventory, Notifications)** cez **OrderCreatedEvent**; udalosť sa publikuje aj do **RabbitMQ** pre externých odberateľov.
 
@@ -119,10 +105,13 @@ Aplikácia je jeden spustiteľný artefakt (Spring Boot) so **silne ohraničený
 * **Orders** – prijatie a spracovanie objednávok; publikovanie doménovej udalosti po úspešnom vytvorení objednávky.
 * **Inventory** – reakcia na udalosti súvisiace s objednávkou, úprava stavov zásob.
 * **Notifications** – reakcia na udalosti a doručenie notifikácií (aktuálne reprezentované obsluhou udalostí).
+* **Users** – správa používateľov a vydávanie JWT tokenov (napr. `/api/users`, `/api/login`).
 
 ### Dátová izolácia a perzistencia
 
 Každý modul vlastní a spravuje **vlastnú schému** v databáze (napr. `catalog`, `orders`, `inventory`). Migrácie sú centralizované a spúšťané pri štarte aplikácie. Tento prístup zodpovedá princípu „**kto mení invarianty, vlastní dáta**“ a pripravuje pôdu na projekciu modulov do samostatných služieb bez zdieľaných tabuliek.
+
+Poznámka (stav repozitára): projekt zároveň vytvára technickú schému `events`, ktorú používa Spring Modulith JDBC event store ako outbox‑like mechanizmus pre spoľahlivú publikáciu udalostí (viď `spring.modulith.events.jdbc.schema=events` v `src/main/resources/application.properties`).
 
 ```mermaid
 flowchart LR
@@ -130,19 +119,30 @@ flowchart LR
     C[Schema: catalog]
     O[Schema: orders]
     I[Schema: inventory]
+    U[Schema: users]
+    E[Schema: events]
   end
   Catalog(((Catalog))) --> C
   Orders(((Orders))) --> O
   Inventory(((Inventory))) --> I
+  Users(((Users))) --> U
   Common(((Common))) -. zdieľané modely .- Catalog
   Common -. zdieľané modely .- Orders
   Common -. zdieľané modely .- Inventory
+  %% Schéma 'events' je technická (Spring Modulith JDBC events)
 ```
 
 ### Komunikačné štýly a protokoly
 
-* **SYNCHRÓNNE (v procese):** modul **Orders** volá zverejnené **public API** modulu **Catalog** pri validácii položiek objednávky. Tým sa zachováva enkapsulácia a neobchádzajú sa repozitáre iných modulov.
-* **ASYNCHRÓNNE (udalosti):** po úspešnom vytvorení objednávky **Orders** publikuje doménovú udalosť **OrderCreatedEvent**. **Inventory** a **Notifications** na ňu reagujú ako **downstream** konzumenti. Udalosti sú **externalizované** aj do brokera (RabbitMQ) pre odber mimo procesu.
+* **SYNCHRÓNNE (v procese):** modul **Orders** volá zverejnené **public API** modulu **Catalog** pri validácii položiek objednávky (viď `src/main/java/com/sivalabs/bookstore/catalog/ProductApi.java`, `src/main/java/com/sivalabs/bookstore/orders/domain/ProductServiceClient.java`). Tým sa zachováva enkapsulácia a neobchádzajú sa repozitáre iných modulov.
+* **ASYNCHRÓNNE (udalosti):** po úspešnom vytvorení objednávky **Orders** publikuje doménovú udalosť **OrderCreatedEvent** (viď publikovanie v `src/main/java/com/sivalabs/bookstore/orders/domain/OrderService.java`). **Inventory** a **Notifications** na ňu reagujú ako **downstream** konzumenti. Udalosti sú **externalizované** aj do brokera (RabbitMQ) pre odber mimo procesu.
+
+AMQP detaily (stav repozitára):
+
+- Exchange: `BookStoreExchange`
+- Routing key: `orders.new`
+- Queue: `new-orders`
+- Konfigurácia je v `src/main/java/com/sivalabs/bookstore/config/RabbitMQConfig.java`; samotná udalosť je označená anotáciou `@Externalized("BookStoreExchange::orders.new")` v `src/main/java/com/sivalabs/bookstore/orders/domain/models/OrderCreatedEvent.java`.
 
 ```mermaid
 sequenceDiagram
@@ -160,7 +160,7 @@ sequenceDiagram
   Orders-->>Bus: Publish OrderCreatedEvent
   Bus-->>Inv: Consume OrderCreatedEvent
   Bus-->>Notif: Consume OrderCreatedEvent
-  Inv->>Inv: Aktualizácia zásob (eventual consistency)
+  Inv->>Inv: Aktualizácia zásob (eventuálna konzistentnosť)
   Notif->>Notif: Odoslanie notifikácie
 ```
 
@@ -328,6 +328,8 @@ Architektonické zásady:
 
 Príklad obálky udalosti (event envelope):
 
+Poznámka (stav repozitára): nasledujúca obálka je cieľový kontrakt pre migráciu k mikroslužbám. Aktuálna AMQP publikácia v repozitári (externalizovaný `OrderCreatedEvent`) ešte nenesie všetky tieto polia; doplnenie `eventId`, `occurredAt`, `producer`, `correlationId` a verziovania je súčasťou roadmapy.
+
 ```json
 {
   "eventId": "e8a2d2b0-9f3c-4c19-9f3e-54b0f3c2fa10",
@@ -349,6 +351,8 @@ Príklad obálky udalosti (event envelope):
 - Zápisy a zmeny stavu: cez udalosti a Sagy; Orders je zdroj pravdy pre životný cyklus objednávok, Inventory pre dostupnosť.
 - CQRS: čítacie modely pre agregované pohľady (napr. Orders+Inventory pre „order status with stock“) sa budujú projekciami; cache s TTL a invalidáciou z udalostí.
 - Outbox + idempotencia: at‑least‑once doručenie akceptované; konzumenti používajú eventId a business key (orderNumber) pre deduplikáciu.
+ 
+Poznámka (stav repozitára): v `src/main/java/com/sivalabs/bookstore/inventory/InventoryService.java` (metóda `decreaseStockLevel`) sa aktuálne neaplikuje idempotencia ani ochrana proti zápornému stavu zásob; tieto pravidlá (idempotentná rezervácia a invariant „nezáporný stav zásob“/non‑negative stock) sú plánované ako budúca práca. Stavy objednávok nad rámec „created“ (napr. „confirmed“, „cancelled“) zatiaľ nie sú implementované – sú navrhnuté jako cieľový stav a budú doplnené spolu s udalosťami `OrderConfirmed`/`OrderCancelled`.
 
 #### 6.1.4 Bezpečnosť a IAM (zero‑trust)
 
@@ -448,6 +452,8 @@ classDiagram
     +DB: schema users
   }
 ```
+
+Poznámka (stav repozitára): časti diagramu týkajúce sa `StockReserved/Released` a `OrderConfirmed/Cancelled` reprezentujú budúci stav. V aktuálnom kóde je implementovaná publikácia `OrderCreatedEvent` a jednoduchá úprava zásob bez kompenzácií a bez idempotencie.
 
 Orientačná sekvencia Sagy „PlaceOrder“ (choreografia; orchestrátor môže byť súčasťou Orders):
 
@@ -553,29 +559,3 @@ Vybraný repozitár už poskytuje jasné modulové hranice, udalosť **OrderCrea
 [7] Krebs, S.; Kapferer, S.; Zimmermann, O.; et al. “Domain‑Driven Service Design.” SoC 2020 (authors’ copy). URL: [https://contextmapper.org/media/SummerSoC-2020_Domain-driven-Service-Design_Authors-Copy.pdf](https://contextmapper.org/media/SummerSoC-2020_Domain-driven-Service-Design_Authors-Copy.pdf)
 
 [8] **andrejvysny/spring-modular-monolith** – „A modular monolith application built with Spring Modulith“, README a projektové súbory. URL: [https://github.com/andrejvysny/spring-modular-monolith](https://github.com/andrejvysny/spring-modular-monolith)
-
----
-
-## A. Replikačný balíček (šablóny)
-
-* Šablóna pre Context Map (Mermaid).
-* Šablóna katalógu agregátov a invariantov.
-* Šablóna Sagy (kroky, kompenzácie, idempotencia).
-* Šablóna ACL (mapovanie starého modelu → nový model).
-
----
-
-## B. Hrozby validity (teoretická fáza)
-
-* Konštruktová: zjednodušenie domény bez reálnych dát.
-* Externá: prenositeľnosť medzi doménami.
-* Záverová: bez telemetrie len kvalifikované odhady.
-* Mitigácie: explicitné predpoklady, transparentné rozhodovacie kritériá, budúce merania.
-
----
-
-## C. Praktické prílohy (pracovné listy)
-
-* Check‑list „je BC na správnej granularite?“
-* Check‑list „je endpoint idempotentný?“
-* Check‑list „je Saga dostatočne kompenzovateľná?“
