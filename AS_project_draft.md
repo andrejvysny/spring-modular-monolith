@@ -4,7 +4,7 @@
 
 **Typ dokumentu:** Industry whitepaper (teoretická fáza, bez produkčnej telemetrie)
 
-**Autori:** …
+**Autori:** tím semestrálneho projektu (FIIT)
 
 **Kľúčové pojmy:** DDD, bounded context, context map, Strangler Fig, Saga, outbox, idempotencia, 12‑Factor, observability
 
@@ -94,11 +94,11 @@ Metodika vyžaduje tieto artefakty: mapy kontextov, katalóg agregátov s invari
 
 ## 4. Cieľový repozitár a technológie
 
-**Repozitár:** [andrejvysny/spring-modular-monolith](https://github.com/andrejvysny/spring-modular-monolith) – verejná fork varianta ukážkovej e‑commerce aplikácie na **Spring Modulith**. Projekt je licencovaný pod **Apache‑2.0** a obsahuje moduly **Common, Catalog, Orders, Inventory, Notifications**, s dôrazom na **nezávislosť modulov**, **udalostnú komunikáciu** a **izolované dátové schémy** (`catalog`, `orders`, `inventory`)  citeturn2view0.
+**Repozitár:** [andrejvysny/spring-modular-monolith](https://github.com/andrejvysny/spring-modular-monolith) – verejná fork varianta ukážkovej e‑commerce aplikácie na **Spring Modulith**. Projekt je licencovaný pod **Apache‑2.0** a obsahuje moduly **Common, Catalog, Orders, Inventory, Notifications**, s dôrazom na **nezávislosť modulov**, **udalostnú komunikáciu** a **izolované dátové schémy** (`catalog`, `orders`, `inventory`).
 
-**Komunikačné toky:** **Orders → Catalog** (validačné volanie cez public API), **Orders → (Inventory, Notifications)** cez **OrderCreatedEvent**; udalosť sa publikuje aj do **RabbitMQ** pre externých odberateľov  citeturn2view0.
+**Komunikačné toky:** **Orders → Catalog** (validačné volanie cez public API), **Orders → (Inventory, Notifications)** cez **OrderCreatedEvent**; udalosť sa publikuje aj do **RabbitMQ** pre externých odberateľov.
 
-**Prevádzka a nástroje:** **Docker Compose** (aplikačný kontajner + RabbitMQ + Zipkin), **Actuator** vrátane **/actuator/modulith**, **observability** cez **Zipkin**, **Kubernetes** manifesty pre **KinD**; požiadavky **JDK 24**, doplnkovo **go‑task** pre skriptované príkazy  citeturn2view0.
+**Prevádzka a nástroje:** **Docker Compose** (aplikačný kontajner + RabbitMQ + Zipkin), **Actuator** vrátane **/actuator/modulith**, **observability** cez **Zipkin**, **Kubernetes** manifesty pre **KinD**; požiadavky **JDK 24**, doplnkovo **go‑task** pre skriptované príkazy.
 
 **Dôsledky pre metodiku:** modulárne hranice a udalostné väzby sú už explicitné, čo znižuje riziko chybnej granularizácie počas migrácie; oddelené schémy uľahčujú mapovanie vlastníctva dát na budúce mikroslužby.
 
@@ -222,11 +222,11 @@ classDef bc fill:#eef,stroke:#88f,color:#000;
 classDef open fill:#efe,stroke:#5a5,color:#000;
 ```
 
-**Vysvetlenie:** Vzťah **Orders → Catalog** zodpovedá vzoru **Customer/Supplier**; **Inventory**/**Notifications** sú **downstream** konzumenti doménovej udalosti **OrderCreatedEvent**; Common je otvorený modul zdieľaný naprieč aplikáciou  citeturn2view0.
+**Vysvetlenie:** Vzťah **Orders → Catalog** zodpovedá vzoru **Customer/Supplier**; **Inventory**/**Notifications** sú **downstream** konzumenti doménovej udalosti **OrderCreatedEvent**; Common je otvorený modul zdieľaný naprieč aplikáciou.
 
-**5.2 Doménové invarianty a vlastníctvo dát:** Každý modul spravuje svoje dáta v oddelenej schéme (`catalog`, `orders`, `inventory`), čo je v súlade s princípom „kto mení invarianty, vlastní dáta“. To umožňuje priamu projekciu BC→mikroslužba bez zdieľaných databáz  citeturn2view0.
+**5.2 Doménové invarianty a vlastníctvo dát:** Každý modul spravuje svoje dáta v oddelenej schéme (`catalog`, `orders`, `inventory`), čo je v súlade s princípom „kto mení invarianty, vlastní dáta“. To umožňuje priamu projekciu BC→mikroslužba bez zdieľaných databáz.
 
-**5.3 Integrácia a pozorovateľnosť:** Preferovaný štýl je **event‑driven**; udalosti sú dostupné aj mimo procesu cez **RabbitMQ**. Aplikačná observability je pripravená cez **Spring Actuator** (vrátane **/actuator/modulith** pre pohľad na moduly) a **Zipkin** pre trasovanie  citeturn2view0.
+**5.3 Integrácia a pozorovateľnosť:** Preferovaný štýl je **event‑driven**; udalosti sú dostupné aj mimo procesu cez **RabbitMQ**. Aplikačná observability je pripravená cez **Spring Actuator** (vrátane **/actuator/modulith** pre pohľad na moduly) a **Zipkin** pre trasovanie.
 
 ---
 
@@ -510,22 +510,6 @@ Cutover a validácia:
 
 ## 7. Hodnotiaci rámec (bez produkčných meraní)
 
-**7.1 Architektonické metriky (proxy):** súdržnosť modulov (tematická/pomenovaná), počet krížových závislostí; závislostné cykly; „change‑surface“ (počet miest dotknutých zmenou).
-
-**7.2 Prevádzkovo‑dodávateľské metriky (konceptuálne):** cieľová p95 latencia, priepustnosť, chybovosť; časy nasadenia a spustenia; nezávislosť releasov; MTTR.
-
-**7.3 Evidencia bez telemetrie:** analytické odôvodnenie, rizikové scenáre, „failure storyboards“, porovnanie variantov (tabuľka trade‑offov).
-
-**Šablóna porovnania:**
-
-| Aspekt              | Monolit (východzí stav) | Cieľ – mikroslužby | Trade‑off |
-| ------------------- | ----------------------- | ------------------ | --------- |
-| Súdržnosť           |                         |                    |           |
-| Prepojenosť         |                         |                    |           |
-| p95 latencia (cieľ) |                         |                    |           |
-| Priepustnosť (cieľ) |                         |                    |           |
-| Chybovosť (cieľ)    |                         |                    |           |
-| Nasadenie/štart     |                         |                    |           |
 
 ---
 
@@ -588,9 +572,3 @@ Vybraný repozitár už poskytuje jasné modulové hranice, udalosť **OrderCrea
 * Check‑list „je BC na správnej granularite?“
 * Check‑list „je endpoint idempotentný?“
 * Check‑list „je Saga dostatočne kompenzovateľná?“
-
-**Kontrolné otázky pre editora:**
-
-* Je doménový slovník úplný?
-* Sú hranice BC podporené invariantmi?
-* Sú prvé migračné rezy nízkorizikové a merateľné?
