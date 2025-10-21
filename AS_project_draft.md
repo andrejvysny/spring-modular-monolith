@@ -104,6 +104,97 @@ Metodika vyžaduje tieto artefakty: mapy kontextov, katalóg agregátov s invari
 
 ---
 
+## 4.1 Pôvodná architektúra (východzí stav)
+
+Táto sekcia sumarizuje východzí stav repozitára ako **modulárneho monolitu** postaveného na Spring Modulith. Slúži ako **„starting point“** pre ďalšie kroky tejto štúdie. Popisuje architektonický štýl, hranice modulov, dátovú izoláciu, komunikačné vzory a operačné prvky bez uvádzania implementačných detailov.
+
+### Architektonický štýl a runtime
+
+Aplikácia je jeden spustiteľný artefakt (Spring Boot) so **silne ohraničenými modulmi**. Modulové hranice sú vedené balíčkovou štruktúrou a verifikované nástrojmi Spring Modulith. Cieľom je minimalizovať priame interné závislosti medzi modulmi a uprednostniť **udalostnú komunikáciu** tam, kde je to vhodné.
+
+### Moduly a zodpovednosti
+
+* **Common** – otvorený modul so spoločnými modelmi a utilitami.
+* **Catalog** – správa produktového katalógu a poskytovanie interného API na validáciu produktov.
+* **Orders** – prijatie a spracovanie objednávok; publikovanie doménovej udalosti po úspešnom vytvorení objednávky.
+* **Inventory** – reakcia na udalosti súvisiace s objednávkou, úprava stavov zásob.
+* **Notifications** – reakcia na udalosti a doručenie notifikácií (aktuálne reprezentované obsluhou udalostí).
+
+### Dátová izolácia a perzistencia
+
+Každý modul vlastní a spravuje **vlastnú schému** v databáze (napr. `catalog`, `orders`, `inventory`). Migrácie sú centralizované a spúšťané pri štarte aplikácie. Tento prístup zodpovedá princípu „**kto mení invarianty, vlastní dáta**“ a pripravuje pôdu na projekciu modulov do samostatných služieb bez zdieľaných tabuliek.
+
+```mermaid
+flowchart LR
+  subgraph Postgres[PostgreSQL]
+    C[Schema: catalog]
+    O[Schema: orders]
+    I[Schema: inventory]
+  end
+  Catalog(((Catalog))) --> C
+  Orders(((Orders))) --> O
+  Inventory(((Inventory))) --> I
+  Common(((Common))) -. zdieľané modely .- Catalog
+  Common -. zdieľané modely .- Orders
+  Common -. zdieľané modely .- Inventory
+```
+
+### Komunikačné štýly a protokoly
+
+* **SYNCHRÓNNE (v procese):** modul **Orders** volá zverejnené **public API** modulu **Catalog** pri validácii položiek objednávky. Tým sa zachováva enkapsulácia a neobchádzajú sa repozitáre iných modulov.
+* **ASYNCHRÓNNE (udalosti):** po úspešnom vytvorení objednávky **Orders** publikuje doménovú udalosť **OrderCreatedEvent**. **Inventory** a **Notifications** na ňu reagujú ako **downstream** konzumenti. Udalosti sú **externalizované** aj do brokera (RabbitMQ) pre odber mimo procesu.
+
+```mermaid
+sequenceDiagram
+  participant Client as Klient (REST)
+  participant Orders as Orders
+  participant Catalog as Catalog (API)
+  participant Bus as Event Bus / RabbitMQ
+  participant Inv as Inventory
+  participant Notif as Notifications
+
+  Client->>Orders: POST /api/orders
+  Orders->>Catalog: Validácia produktov (sync API)
+  Catalog-->>Orders: Výsledok validácie
+  Orders->>Orders: Persistencia objednávky (lokálna transakcia)
+  Orders-->>Bus: Publish OrderCreatedEvent
+  Bus-->>Inv: Consume OrderCreatedEvent
+  Bus-->>Notif: Consume OrderCreatedEvent
+  Inv->>Inv: Aktualizácia zásob (eventual consistency)
+  Notif->>Notif: Odoslanie notifikácie
+```
+
+### Bezpečnosť a rozhrania
+
+Externé rozhranie tvoria REST endpointy pod `/api/**`. Prístup je oddelený od webovej vrstvy; nepredpokladá sa zdieľanie interných perzistentných modelov smerom navonok. V tejto teoretickej fáze nehodnotíme konkrétny IAM/SSO stack; bezpečnostná konfigurácia je riešená v samostatných konfiguračných triedach.
+
+### Observability a operatíva
+
+Projekt obsahuje pripravené **operatívne nástroje**: koncové body **Spring Actuator** (vrátane prehľadu modulov), integráciu **distributed tracing** cez **Zipkin** a zapojenie **RabbitMQ** ako správy udalostí. Súčasťou repozitára sú aj manifesty pre lokálne nasadenie do **KinD** a **Docker Compose** pre spustenie závislostí.
+
+```mermaid
+flowchart LR
+  subgraph Runtime
+    App[Spring Boot App]:::svc
+    Actuator[(Actuator /actuator
+/modulith)]:::edge
+    Zipkin[(Zipkin)]:::edge
+    RMQ[(RabbitMQ)]:::edge
+  end
+  App -- trace export --> Zipkin
+  App -- health, metrics --> Actuator
+  App -- externalized events --> RMQ
+
+  classDef svc fill:#eef,stroke:#88f,color:#000;
+  classDef edge fill:#efe,stroke:#5a5,color:#000;
+```
+
+### Testovanie a verifikácia modularity
+
+Modulárna štruktúra je verifikovateľná testami na úrovni modulov (bez nutnosti bootstrapu celej aplikácie) a podporuje integračné testovanie udalostí. Táto vlastnosť je kľúčová pre bezpečné rezy v migračnom scenári.
+
+---
+
 ## 5. DDD analýza a cieľová architektúra (aplikácia na vybraný repozitár)
 
 **5.1 Context Map (aktuálny stav – modulárny monolit):**
@@ -141,15 +232,279 @@ classDef open fill:#efe,stroke:#5a5,color:#000;
 
 ## 6. Migračný plán (Strangler Fig – aplikácia na repozitár)
 
-**Slice 1 – Čítacie toky Katalógu.** Pred modulárnym proxy nasmerovať čítacie požiadavky `/catalog/**` na samostatnú službu „Catalog‑Read“. Zdroj dát cez replikáciu/CDC z `catalog` schémy; žiadne zápisy.
+Táto kapitola definuje cieľovú architektúru mikroslužieb s dôrazom na DDD a načrtáva vysokoúrovňový refaktoračný rámec (nie implementačný návod). Uvádzame publikačne vhodný, akademicky orientovaný návrh s dôrazom na správne hranice, published language, idempotenciu a riadenie rizík.
 
-**Slice 2 – Udalostné doručovanie objednávok.** Zaviesť **outbox** v **Orders** tak, aby publikovanie **OrderCreatedEvent** bolo atómové; doručovanie do **RabbitMQ** ponechať ako „at‑least‑once“ s **idempotentnými** odberateľmi (Inventory/Notifications) – zlučuje sa s existujúcim modelom udalostí  citeturn2view0.
+### 6.1 Cieľová architektúra mikroslužieb (DDD‑konzistentná)
 
-**Slice 3 – Inventár ako samostatná služba.** Externý **Inventory** spotrebúva udalosti a udržiava vlastnú projekciu zásob; kompenzácie pri zlyhaní aktualizácie zásob definované v rámci **Sagy** `PlaceOrder`.
+Mapovanie ohraničených kontextov (BC) → samostatné služby s vlastným dátovým úložiskom a kontraktmi:
 
-**Cutover kritériá:** funkčná rovnocennosť, nezávislé nasadenie, stabilné SLA pre čítanie katalógu, bez zdieľania databáz medzi službami.
+- Catalog Service (BC: Catalog) – kurátor produktov, zdroj pravdy o produktoch, publikuje ProductChanged.
+- Orders Service (BC: Orders) – riadi životný cyklus objednávok, publikuje OrderCreated/OrderCancelled/OrderConfirmed.
+- Inventory Service (BC: Inventory) – zodpovedá za stav zásob, reaguje na objednávky, publikuje StockReserved/StockReleased.
+- Notifications Service (BC: Notifications) – doručovanie notifikácií; konzument udalostí, bez vlastných invariantov iných BC.
+- Users/Auth Service (BC: Identity & Access) – identita, JWT/OIDC; žiadne priame zdieľanie dát s inými BC.
 
-**Rollback:** routing späť cez proxy (feature flag); kompenzačné kroky pre rozbehnuté Sagy.
+Podporné prvky: API Gateway (vyjednávanie verzií, rate‑limiting), Message Broker (RabbitMQ/Kafka), Observability (tracing, metriky), Outbox relay v každej službe.
+
+```mermaid
+flowchart LR
+  subgraph Edge[Edge / API layer]
+    Client[Clients (Web, Mobile, 3rd‑party)]
+    APIGW[API Gateway]
+  end
+
+  subgraph S1[Catalog Service]
+    CDB[(catalog DB)]
+  end
+  subgraph S2[Orders Service]
+    ODB[(orders DB)]
+  end
+  subgraph S3[Inventory Service]
+    IDB[(inventory DB)]
+  end
+  subgraph S4[Notifications Service]
+    NDB[(notifications DB)]
+  end
+  subgraph S5[Users/Auth Service]
+    UDB[(users DB)]
+  end
+
+  MB[(Message Broker)]
+  Obs[(Observability: Traces/Metrics/Logs)]
+
+  Client --> APIGW
+  APIGW --> S1
+  APIGW --> S2
+  APIGW --> S3
+  APIGW --> S4
+  APIGW --> S5
+
+  S2 -- OrderCreated/Cancelled/Confirmed --> MB
+  S1 -- ProductChanged --> MB
+  S3 -- StockReserved/Released --> MB
+  MB -- subscribe --> S3
+  MB -- subscribe --> S4
+  MB -- subscribe --> S2
+
+  S1 --> CDB
+  S2 --> ODB
+  S3 --> IDB
+  S4 --> NDB
+  S5 --> UDB
+
+  S1 --- Obs
+  S2 --- Obs
+  S3 --- Obs
+  S4 --- Obs
+  S5 --- Obs
+```
+
+Architektonické zásady:
+
+- Jeden BC = jedna služba s vlastným úložiskom a published language (udalosti + API). Žiadne zdieľané tabuľky.
+- Komunikácia medzi BC preferenčne asynchrónna (udalosti), synchronná iba pre ne‑kritické dopyty s ACL.
+- Outbox vzor v každej službe (atomizácia zmeny a publikovania). Idempotentní konzumenti, at‑least‑once doručenie.
+- Kontraktové a verziovacie pravidlá: semver pre API, verzie schém udalostí, backward/forward kompatibilita.
+- Pozorovateľnosť a bezpečnosť ako „first‑class“: trasovanie cez hranice BC, jednotný IAM (JWT/OIDC), politiky na API Gateway.
+
+#### 6.1.1 Vlastníctvo dát a perzistencia
+
+- Každá služba vlastní svoj model a schému; nepovoľuje sa priame čítanie cudzej DB. Integrácia prebieha výlučne cez kontrakty (API/udalosti).
+- Odporúčaný štýl perzistencie: relačná DB pre Orders/Inventory (ACID transakcie), relačná alebo dokumentová DB pre Catalog podľa potreby vyhľadávania.
+- História udalostí a outbox tabuľky sú súčasťou domény každej služby (nie centrálne úložisko). Retencia a GDPR‑politiky sú definované per BC.
+
+#### 6.1.2 Kontrakty, published language a verzovanie
+
+- Synchronné kontrakty: REST (alebo GraphQL pre čítania) s prísnym verzovaním (semver), deprecations s časovým oknom a zmluvnými testami.
+- Asynchrónne kontrakty: doménové udalosti s explicitnou schémou (JSON/Avro). Povinné polia „eventId“, „version“, „occurredAt“, „producer“, „correlationId“ (napr. orderNumber).
+- Registry kontraktov: odporúčaná git‑centrická správa schém + validácia v CI (Pact/CDC, JSON‑Schema/Avro‑compatibility check).
+
+Príklad obálky udalosti (event envelope):
+
+```json
+{
+  "eventId": "e8a2d2b0-9f3c-4c19-9f3e-54b0f3c2fa10",
+  "type": "OrderCreated",
+  "version": 2,
+  "occurredAt": "2025-10-20T12:34:56.789Z",
+  "producer": "orders-service",
+  "correlationId": "ORD-2025-001234",
+  "payload": {
+    "orderNumber": "ORD-2025-001234",
+    "items": [{"code": "P100", "qty": 1, "price": 34.00}],
+    "customer": {"name": "Siva", "email": "siva@example.com"}
+  }
+}
+```
+
+#### 6.1.3 Konzistencia, CQRS a cache stratégie
+
+- Zápisy a zmeny stavu: cez udalosti a Sagy; Orders je zdroj pravdy pre životný cyklus objednávok, Inventory pre dostupnosť.
+- CQRS: čítacie modely pre agregované pohľady (napr. Orders+Inventory pre „order status with stock“) sa budujú projekciami; cache s TTL a invalidáciou z udalostí.
+- Outbox + idempotencia: at‑least‑once doručenie akceptované; konzumenti používajú eventId a business key (orderNumber) pre deduplikáciu.
+
+#### 6.1.4 Bezpečnosť a IAM (zero‑trust)
+
+- Autentifikácia: JWT/OIDC cez Users/Auth; služby validujú tokeny lokálne (resource server model) bez centrálnej session.
+- Autorizácia: scope/role claims pre čítania/zápisy per BC; minimálne privilegované DB identity per služba.
+- Ochrana dát: klasifikácia PII, šifrovanie „at rest“ a „in transit“, rotácia kľúčov, audit prístupov a udalostí.
+
+#### 6.1.5 Observability a SLO
+
+- Traces: automatická propagácia trace‑contextu aj v udalostiach (inject/extract do event headers) pre end‑to‑end koreláciu.
+- Metriky: SLI pre p95/p99 latencie, chybovosť, doručené vs. kompenzované Sagy, pomer re‑delivery udalostí.
+- Logy: štruktúrované, s correlationId; sampling pre vysokú priepustnosť.
+
+#### 6.1.6 Škálovanie a odolnosť
+
+- Horizontálne škálovanie: nezávislé na úrovni služby; pre udalosti použitie consumer groups (paralelizácia podľa partitioning key – napr. productCode alebo orderNumber).
+- Odolnosť: timeouts, retries s exponenciálnym backoff + jitter, circuit breakers, bulkheads; dead‑letter queue pre neúspešné spracovania.
+
+#### 6.1.7 Nasadenie a infraštruktúra
+
+- Kontajnerizácia a Kubernetes (namespaces per BC), deklaratívna konfigurácia (ConfigMap/Secrets), IaC pre infra artefakty.
+- API Gateway s canary/blue‑green routingom pre bezpečné cutovery; traffic shaping pri migráciách.
+- Každá služba s vlastným CI/CD pipeline, kontraktové testy ako brána do produkcie.
+
+#### 6.1.8 Riadenie zmien a governance
+
+- Politika deprecations: oznámenie, dual‑publish udalostí (v1+v2) na prechodné obdobie, meranie adopcie spotrebiteľov.
+- ADR a architektonická dokumentácia: pre BC rozhodnutia, zmeny invariantov a kontextové mapy.
+
+##### Cieľová Context Map (po migrácii)
+
+```mermaid
+flowchart LR
+  Catalog[Catalog Service]:::bc -->|Published Language| Broker[(Broker)]
+  Orders[Orders Service]:::bc -->|Published Language| Broker
+  Inventory[Inventory Service]:::bc -->|Published Language| Broker
+  Notifications[Notifications Service]:::bc -->|Consumes| Broker
+  Users[Users/Auth Service]:::bc -. JWT/OIDC .- Gateway[API Gateway]
+  Gateway --> Orders
+  Gateway --> Catalog
+  Gateway --> Inventory
+  Gateway --> Notifications
+
+  classDef bc fill:#eef,stroke:#88f,color:#000;
+```
+
+### 6.2 DDD mapovanie a princípy na úrovni služby
+
+Nasledujúci diagram sumarizuje DDD prvky pre každú službu (agregáty, invariants, udalosti, ACL, typy integrácie):
+
+```mermaid
+classDiagram
+  class CatalogService {
+    +Aggregates: Product
+    +Invariants: code unique, price numeric>=0
+    +EventsOut: ProductChanged(v,occurredAt)
+    +EventsIn: -
+    +API: GET /products, GET /products/{code}
+    +ACL: PublishedLanguage only
+    +DB: schema catalog
+  }
+  class OrdersService {
+    +Aggregates: Order
+    +ValueObjects: OrderItem, Customer
+    +Invariants: nonEmptyItems, validStatusFlow, priceIntegrity
+    +EventsOut: OrderCreated, OrderCancelled, OrderConfirmed
+    +EventsIn: StockReserved, StockReleased, PaymentCaptured
+    +API: POST /orders, GET /orders{,/{id}}
+    +ACL: CatalogACL (sync), optional ProductView
+    +DB: schema orders
+  }
+  class InventoryService {
+    +Aggregates: StockItem
+    +Invariants: nonNegativeStock, idempotentReservation
+    +EventsOut: StockReserved, StockReleased
+    +EventsIn: OrderCreated, OrderCancelled
+    +API: GET /inventory/{code}
+    +ACL: PublishedLanguage only
+    +DB: schema inventory
+  }
+  class NotificationsService {
+    +Aggregates: -
+    +Invariants: deliveryAtLeastOnce
+    +EventsOut: NotificationSent(optional)
+    +EventsIn: OrderCreated, OrderConfirmed
+    +API: - (internal)
+    +ACL: PublishedLanguage only
+    +DB: outbox/log store
+  }
+  class UsersService {
+    +Aggregates: User
+    +Invariants: emailUnique, passwordPolicy
+    +EventsOut: - (optional UserRegistered)
+    +EventsIn: -
+    +API: /login, /users
+    +ACL: JWT/OIDC provider
+    +DB: schema users
+  }
+```
+
+Orientačná sekvencia Sagy „PlaceOrder“ (choreografia; orchestrátor môže byť súčasťou Orders):
+
+```mermaid
+sequenceDiagram
+  participant Client
+  participant Orders
+  participant Inventory
+  participant Catalog
+  participant Broker as Message Broker
+
+  Client->>Orders: POST /orders (JWT)
+  Orders->>Catalog: (ACL) Validate product (optional sync)
+  Catalog-->>Orders: OK
+  Orders->>Orders: Persist order + Outbox(OrderCreated)
+  Orders-->>Broker: Publish OrderCreated
+  Broker-->>Inventory: OrderCreated
+  Inventory->>Inventory: Reserve stock (idempotent)
+  Inventory-->>Broker: Publish StockReserved | StockReleased
+  Broker-->>Orders: StockReserved/Released
+  Orders->>Orders: Transition state (Confirmed | Rejected), Outbox event
+```
+
+### 6.3 Refaktoračný rámec (vysokoúrovňový, akademický)
+
+Zásady (čo robiť):
+
+- Rešpektovať BC a posilniť agregáty: presuňte pravidlá a invarianty do agregátov; služby nech orchestrujú, nie „vlastnia“ pravidlá.
+- Preferovať published language: udalosti sú primárny kontrakt; synchronné volania cez ACL, nie priamy model inej služby.
+- Zaviesť outbox + idempotenciu: každý producent používa transactional outbox; konzumenti de‑duplikujú podľa eventId a kľúčov idempotencie.
+- Verzionovať kontrakty: schémy udalostí a API s dôrazom na backward kompatibilitu; explicitné release poznámky k zmenám doménového jazyka.
+- Automatizovať verifikáciu: zmluvné testy (CDC), modulárne verifikátory hraníc, simulácie chýb (chaos/latency injection) pre Sagy.
+- Pozorovateľnosť: korelačné ID (orderNumber), trace‑context v udalostiach, metriky úspešnosti kompenzácií a latencie Ság.
+- Bezpečnosť: jednotné identity (JWT/OIDC), politiky na API Gateway, minimálne privilegované DB identity na službu.
+
+Antivzory (čomu sa vyhnúť):
+
+- Zdieľané databázy medzi službami alebo cross‑service JOINy.
+- „Big‑bang“ refaktoring bez cutover stratégie a bez merateľných DoD.
+- Nekontrolované synchronné reťazenie volaní (cascading failures) bez timeoutov a circuit breakers.
+- Udalosti bez verzie a bez identít (nemožné vyhodnocovať idempotenciu a evolúciu).
+
+Odporúčané rozhodovacie kritériá:
+
+- Granularita služby = hranice zdieľaných invariantov; ak invarianty presakujú medzi BC, re‑scopovať hranice.
+- Orchestrácia vs choreografia: ak tok vyžaduje centrálne podmienky (napr. platba), zvážte orchestrátor v Orders; inak uprednostnite jednoduchú choreografiu.
+- Sync vs async: zápisy a zmeny stavu cez udalosti; synchronné volania len pre čítania alebo pred‑overenia s degradovateľným správaním.
+
+### 6.4 Migračná stratégia (Strangler Fig – rezy a cutovery)
+
+Navrhované rezy (bez implementačných detailov):
+
+1) Catalog‑Read slice: vyčleniť čítacie API katalógu za API Gateway; pripraviť ProductChanged a voliteľnú projekciu v Orders.
+2) Orders outbox & events: formalizovať OrderCreated (envelope: eventId, version, occurredAt, correlationId), zaviesť outbox a CDC/relay.
+3) Inventory service: extrahovať ako nezávislého konzumenta; zaviesť idempotenciu a minimálne kontrolné metriky (reserve success rate, negative stock guard).
+4) Notifications: extrahovať ako „easy win“; doručovanie aspoň raz, retry/backoff.
+5) Users/Auth: stabilizovať ako IdP s JWT/OIDC; odpojiť peer‑to‑peer väzby.
+6) Orchestration maturity: doplniť StockReserved/Released a OrderConfirmed/Cancelled; ak sa pridá Payments/Shipping, definovať Sagy a kompenzácie.
+
+Cutover a validácia:
+
+- DoD: funkčná rovnocennosť pre rezy, nezávislé nasadenie, žiadne nové zdieľané tabuľky, SLO pre latencie čítaní a percento úspechu Ság.
+- Rollback: traffic switches na API Gateway (feature flags), idempotentné kompenzácie.
+- Evidencia: zmluvné testy, „failure storyboards“, trace‑based analýza latencií.
 
 ---
 
